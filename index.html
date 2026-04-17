@@ -421,7 +421,7 @@ a{color:var(--green);text-decoration:none}
   <div class="plabel">// Markets</div>
   <div class="ptitle">Token Analytics</div>
   <div class="uline"></div>
-  <div class="alert ai">Live data from CoinGecko free API. Jupiter Tokens API returned 404 — documented in DX Report. Click refresh to update.</div>
+  <div class="alert ai">Primary: Jupiter Tokens API v2 (search endpoint) + Price API v3. Fallback: CoinGecko. Organic score and holder count from Jupiter. ATH/ATL from CoinGecko.</div>
   <div class="g4" style="margin-bottom:22px">
     <div class="metric"><div class="mlabel">SOL Price</div><div class="mval" id="ta-price" style="color:var(--green)">$—</div><div class="msub" id="ta-chg">—</div></div>
     <div class="metric"><div class="mlabel">Market Cap</div><div class="mval" id="ta-mcap" style="font-size:17px">—</div></div>
@@ -440,6 +440,8 @@ a{color:var(--green);text-decoration:none}
         <tr><td>Circulating supply</td><td id="ta-supply">—</td></tr>
         <tr><td>7-day change</td><td id="ta-7d">—</td></tr>
         <tr><td>30-day change</td><td id="ta-30d">—</td></tr>
+        <tr><td>Organic score</td><td id="ta-organic">—</td></tr>
+        <tr><td>Holder count</td><td id="ta-holders">—</td></tr>
       </table>
     </div>
   </div>
@@ -758,53 +760,121 @@ setInterval(()=>{
 // ════════════════════════════════════════════════════
 // PRICES — CoinGecko + Jupiter fallback
 // ════════════════════════════════════════════════════
-async function fetchPrices(){
-  try{
-    const r=await fetch('https://api.coingecko.com/api/v3/simple/price?ids=solana,bitcoin,ethereum,jupiter-exchange-solana&vs_currencies=usd&include_24hr_change=true');
-    const d=await r.json();
-    if(d.solana){P.sol=d.solana.usd||P.sol;C.sol=d.solana.usd_24h_change||0;}
-    if(d.bitcoin){P.btc=d.bitcoin.usd||P.btc;C.btc=d.bitcoin.usd_24h_change||0;}
-    if(d.ethereum){P.eth=d.ethereum.usd||P.eth;C.eth=d.ethereum.usd_24h_change||0;}
-    const jd=d['jupiter-exchange-solana'];
-    if(jd){P.jup=jd.usd||P.jup;C.jup=jd.usd_24h_change||0;}
-    paintPrices();
-  }catch(e){
-    // Fallback: try Jupiter Price API for SOL
-    try{
-      const r2=await fetch('https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112');
-      const d2=await r2.json();
-      const p=d2?.data?.['So11111111111111111111111111111111111111112']?.price;
-      if(p){P.sol=parseFloat(p);paintPrices();}
-    }catch(e2){console.log('Price fetch failed',e2);}
-  }
+// ─── JUPITER API CONFIG ──────────────────────────────────────────
+// Set your Jupiter API key here for the dashboard (or leave blank for CoinGecko only)
+// If deploying to Vercel, set VITE_JUPITER_API_KEY in env vars
+const JUP_KEY = window.JUPITER_API_KEY || '';
+
+const SOL_MINT = 'So11111111111111111111111111111111111111112';
+const JUP_MINT = 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN';
+// Wrapped versions on Solana for BTC/ETH price from Jupiter
+const BTC_MINT = '3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh';
+const ETH_MINT = '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs';
+
+let priceSource = 'none'; // tracks which source worked
+
+async function jFetch(url) {
+  const headers = JUP_KEY ? { 'x-api-key': JUP_KEY } : {};
+  const r = await fetch(url, { headers });
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText} — ${url}`);
+  return r.json();
 }
 
-function paintPrices(){
-  // Topbar
-  set('sol-top',P.sol?P.sol.toFixed(2):'—');
-  set('btc-top',P.btc?Math.round(P.btc).toLocaleString():'—');
-  set('eth-top',P.eth?Math.round(P.eth).toLocaleString():'—');
-  // Dashboard
-  set('d-price',fmt(P.sol));
-  set('d-btc',fmt(P.btc));
-  html('d-pchg',`<span style="color:${cc(C.sol)}">${fmtChg(C.sol)}</span>`);
-  html('d-bchg',`<span style="color:${cc(C.btc)}">${fmtChg(C.btc)}</span>`);
-  // Price page
-  set('pf-sol',fmt(P.sol));set('pf-btc',fmt(P.btc));set('pf-eth',fmt(P.eth));
-  set('pf-jup',P.jup?'$'+P.jup.toFixed(4):'$—');
-  html('pf-sc',`<span style="color:${cc(C.sol)}">${fmtChg(C.sol)}</span>`);
-  html('pf-bc',`<span style="color:${cc(C.btc)}">${fmtChg(C.btc)}</span>`);
-  html('pf-ec',`<span style="color:${cc(C.eth)}">${fmtChg(C.eth)}</span>`);
-  html('pf-jc',`<span style="color:${cc(C.jup)}">${fmtChg(C.jup)}</span>`);
-  // Token page
-  set('ta-price',fmt(P.sol));
-  html('ta-chg',`<span style="color:${cc(C.sol)}">${fmtChg(C.sol)}</span>`);
-  // OCO preview
-  if(P.sol){set('oco-e',fmt(P.sol));set('oco-t',fmt(P.sol*1.096)+' (+9.6%)');set('oco-s',fmt(P.sol*0.936)+' (−6.4%)');}
-  // Wallet
-  set('wp-price',fmt(P.sol));
-  updateWalletPortfolio();
-  updatePreview();
+async function fetchPrices() {
+  // Try Jupiter Price API — v3 first (usdPrice field), then v2 (price field)
+  const solAttempts = [
+    { url: `https://api.jup.ag/price/v3?ids=${SOL_MINT},${JUP_MINT}`, field: 'usdPrice', label: 'Jupiter v3' },
+    { url: `https://api.jup.ag/price/v2?ids=${SOL_MINT},${JUP_MINT}&showExtraInfo=true`, field: 'price', label: 'Jupiter v2' },
+  ];
+
+  let jupiterWorked = false;
+  for (const attempt of solAttempts) {
+    try {
+      const d = await jFetch(attempt.url);
+      const solData = d[SOL_MINT];
+      const jupData = d[JUP_MINT];
+      if (solData && (solData[attempt.field] || solData.usdPrice || solData.price)) {
+        P.sol = solData[attempt.field] || solData.usdPrice || solData.price || P.sol;
+        C.sol = solData.priceChange24h || solData.extraInfo?.priceChange24h || C.sol;
+        if (jupData) {
+          P.jup = jupData[attempt.field] || jupData.usdPrice || jupData.price || P.jup;
+          C.jup = jupData.priceChange24h || C.jup;
+        }
+        priceSource = attempt.label;
+        jupiterWorked = true;
+        break;
+      }
+    } catch(e) {
+      console.log(`Price attempt failed (${attempt.label}):`, e.message);
+    }
+  }
+
+  // Also try to get BTC/ETH from Jupiter (wrapped tokens)
+  if (jupiterWorked) {
+    try {
+      const d2 = await jFetch(`https://api.jup.ag/price/v3?ids=${BTC_MINT},${ETH_MINT}`);
+      if (d2[BTC_MINT]?.usdPrice) P.btc = d2[BTC_MINT].usdPrice;
+      if (d2[ETH_MINT]?.usdPrice) P.eth = d2[ETH_MINT].usdPrice;
+    } catch {}
+  }
+
+  // Fallback: CoinGecko (free, no key, reliable)
+  if (!jupiterWorked || !P.btc || !P.eth) {
+    try {
+      const ids = ['solana', !P.btc && 'bitcoin', !P.eth && 'ethereum', !P.jup && 'jupiter-exchange-solana'].filter(Boolean).join(',');
+      const d = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`).then(r=>r.json());
+      if (!jupiterWorked && d.solana) { P.sol = d.solana.usd; C.sol = d.solana.usd_24h_change || 0; priceSource = 'CoinGecko'; }
+      if (d.bitcoin) { P.btc = d.bitcoin.usd; C.btc = d.bitcoin.usd_24h_change || 0; }
+      if (d.ethereum) { P.eth = d.ethereum.usd; C.eth = d.ethereum.usd_24h_change || 0; }
+      if (!P.jup && d['jupiter-exchange-solana']) { P.jup = d['jupiter-exchange-solana'].usd; C.jup = d['jupiter-exchange-solana'].usd_24h_change || 0; }
+    } catch(e) { console.log('CoinGecko failed:', e.message); }
+  }
+
+  paintPrices();
+}
+
+// Jupiter Token data (with fallback to CoinGecko for ATH etc.)
+let tokenDataCache = null;
+async function fetchTokenData() {
+  // Try Jupiter Tokens API v2
+  let jupTokenOk = false;
+  try {
+    const arr = await jFetch(`https://api.jup.ag/tokens/v2/search?query=${SOL_MINT}`);
+    const tok = Array.isArray(arr) ? (arr.find(t => t.id === SOL_MINT) || arr[0]) : arr;
+    if (tok && tok.symbol) {
+      jupTokenOk = true;
+      const vol24 = (tok.stats24h?.buyVolume||0) + (tok.stats24h?.sellVolume||0);
+      set('ta-mcap', tok.mcap ? '$'+(tok.mcap/1e9).toFixed(2)+'B' : '—');
+      set('ta-vol', vol24 ? '$'+(vol24/1e9).toFixed(2)+'B' : '—');
+      set('ta-rank', '—');
+      set('ta-supply', tok.circSupply ? (tok.circSupply/1e6).toFixed(1)+'M SOL' : '—');
+      const el1 = document.getElementById('ta-organic'); if(el1) el1.textContent = tok.organicScore ? tok.organicScore.toFixed(1)+'/100' : '—';
+      const el2 = document.getElementById('ta-holders'); if(el2) el2.textContent = tok.holderCount ? (tok.holderCount/1e6).toFixed(2)+'M' : '—';
+      tokenDataCache = tok;
+      const c24 = tok.stats24h?.priceChange;
+      html('ta-30d', c24!=null ? `<span style="color:${cc(c24)}">${c24>=0?'+':''}${c24.toFixed(2)}% (24h)</span>` : '—');
+      const c1h = tok.stats1h?.priceChange;
+      html('ta-7d', c1h!=null ? `<span style="color:${cc(c1h)}">${c1h>=0?'+':''}${c1h.toFixed(2)}% (1h)</span>` : '—');
+    }
+  } catch(e) { console.log('Jupiter tokens v2 failed:', e.message); }
+
+  // CoinGecko for ATH/ATL/rank/7d/30d (Jupiter doesn't expose these)
+  try {
+    const d = await fetch('https://api.coingecko.com/api/v3/coins/solana?localization=false&tickers=false&community_data=false&developer_data=false').then(r=>r.json());
+    const md = d.market_data;
+    if (!jupTokenOk) {
+      set('ta-mcap', md?.market_cap?.usd ? '$'+(md.market_cap.usd/1e9).toFixed(2)+'B' : '—');
+      set('ta-vol', md?.total_volume?.usd ? '$'+(md.total_volume.usd/1e9).toFixed(2)+'B' : '—');
+      set('ta-supply', md?.circulating_supply ? (md.circulating_supply/1e6).toFixed(1)+'M SOL' : '—');
+      const c7=md?.price_change_percentage_7d, c30=md?.price_change_percentage_30d;
+      html('ta-7d', c7!=null?`<span style="color:${cc(c7)}">${c7>=0?'+':''}${c7.toFixed(2)}% (7d)</span>`:'—');
+      html('ta-30d', c30!=null?`<span style="color:${cc(c30)}">${c30>=0?'+':''}${c30.toFixed(2)}% (30d)</span>`:'—');
+    }
+    set('ta-rank', d.market_cap_rank ? '#'+d.market_cap_rank : '—');
+    set('ta-ath', md?.ath?.usd ? fmt(md.ath.usd) : '—');
+    set('ta-ath-d', md?.ath_date?.usd ? new Date(md.ath_date.usd).toLocaleDateString() : '—');
+    set('ta-atl', md?.atl?.usd ? '$'+md.atl.usd.toFixed(4) : '—');
+  } catch(e) { console.log('CoinGecko token failed:', e.message); }
 }
 
 async function loadPricePage(){
@@ -830,83 +900,6 @@ function buildChart(){
   }).join('');
 }
 
-async function fetchTokenData(){
-  try{
-    const r=await fetch('https://api.coingecko.com/api/v3/coins/solana?localization=false&tickers=false&community_data=false&developer_data=false');
-    const d=await r.json();
-    const md=d.market_data;
-    set('ta-mcap',md?.market_cap?.usd?'$'+(md.market_cap.usd/1e9).toFixed(1)+'B':'—');
-    set('ta-vol',md?.total_volume?.usd?'$'+(md.total_volume.usd/1e9).toFixed(1)+'B':'—');
-    set('ta-rank',d.market_cap_rank?'#'+d.market_cap_rank:'#—');
-    set('ta-ath',md?.ath?.usd?fmt(md.ath.usd):'—');
-    set('ta-ath-d',md?.ath_date?.usd?new Date(md.ath_date.usd).toLocaleDateString():'—');
-    set('ta-atl',md?.atl?.usd?'$'+md.atl.usd.toFixed(4):'—');
-    set('ta-supply',md?.circulating_supply?(md.circulating_supply/1e6).toFixed(1)+'M SOL':'—');
-    const c7=md?.price_change_percentage_7d;
-    const c30=md?.price_change_percentage_30d;
-    html('ta-7d',c7!=null?`<span style="color:${cc(c7)}">${c7>=0?'+':''}${c7.toFixed(2)}%</span>`:'—');
-    html('ta-30d',c30!=null?`<span style="color:${cc(c30)}">${c30>=0?'+':''}${c30.toFixed(2)}%</span>`:'—');
-  }catch(e){console.log('Token data failed',e);}
-}
-
-// ════════════════════════════════════════════════════
-// MARKETS
-// ════════════════════════════════════════════════════
-function drawMarkets(listId,countId,mkts){
-  const el=$(listId);if(!el)return;
-  el.innerHTML=mkts.map(m=>{
-    const col=m.yes>.55?'var(--green)':m.yes<.45?'var(--red)':'var(--amber)';
-    const label=m.yes>.55?'Bullish':m.yes<.45?'Bearish':'Neutral';
-    return`<div class="mi">
-      <div class="miq">${m.q}</div>
-      <div class="mirow">
-        <div class="mitrack"><div class="mifill" style="width:${(m.yes*100).toFixed(0)}%;background:${col}"></div></div>
-        <div class="mipct" style="color:${col}">${(m.yes*100).toFixed(0)}%</div>
-      </div>
-      <div class="mimeta">
-        <span>${m.shift>0?'+':''}${(m.shift*100).toFixed(0)}pp shift &middot; ${m.impact} impact &middot; Vol ${m.vol}</span>
-        <span style="color:${col}">${label}</span>
-      </div>
-    </div>`;
-  }).join('');
-  const c=$(countId);if(c)c.textContent=mkts.length+' markets';
-}
-
-// ════════════════════════════════════════════════════
-// AGENT CYCLE
-// ════════════════════════════════════════════════════
-function addLog(tag,cls,msg,src){
-  const t=new Date().toTimeString().slice(0,8);
-  logHistory.push({t,tag,cls,msg,src});
-  const el=$('agent-log');
-  if(el){
-    const row=document.createElement('div');
-    row.className='lr';
-    row.innerHTML=`<span class="ltime">${t}</span><span class="ltag ${cls}">${tag}</span><div class="lbody">${msg}<div class="lsrc">${src}</div></div>`;
-    el.appendChild(row);
-    el.scrollTop=el.scrollHeight;
-    if(el.children.length>35)el.children[0].remove();
-  }
-}
-
-function refreshFullLog(){
-  const el=$('full-log');if(!el)return;
-  if(!logHistory.length){el.innerHTML='<div style="padding:20px;color:var(--muted);font-size:12px">Waiting for first cycle...</div>';return;}
-  el.innerHTML=logHistory.map(e=>`<div class="lr"><span class="ltime">${e.t}</span><span class="ltag ${e.cls}">${e.tag}</span><div class="lbody">${e.msg}<div class="lsrc">${e.src}</div></div></div>`).join('');
-  el.scrollTop=el.scrollHeight;
-}
-
-function refreshReasoning(){
-  if(!lastSignal){return;}
-  const bull=MARKETS.filter(m=>m.yes>.55);
-  html('r-markets',`${MARKETS.length} markets polled. Bullish count: <strong style="color:var(--green)">${bull.length}</strong>. Top shift: "${MARKETS[0].q.slice(0,45)}..." +${(MARKETS[0].shift*100).toFixed(0)}pp.`);
-  html('r-token',`Organic score: <strong style="color:var(--green)">82/100</strong>. SOL price: <strong style="color:var(--green)">${P.sol?'$'+P.sol.toFixed(2):'—'}</strong>. Volume: $2.5B. Whale flag: <strong style="color:var(--green)">NONE</strong>.`);
-  html('r-reasoning',`"${lastSignal.reasoning}"`);
-  set('r-score',lastSignal.score);
-  set('r-dir',lastSignal.dir);
-  set('r-conf',lastSignal.conf);
-  set('r-multi',lastSignal.multi+'×');
-}
 
 async function runCycle(){
   cycleNum++;
@@ -1243,7 +1236,7 @@ document.querySelectorAll('.page').forEach(p=>{
 // Start clocks
 set('clock',new Date().toTimeString().slice(0,8));
 
-// Fetch prices immediately
+// Fetch prices immediately, retry every 30s
 fetchPrices();
 setInterval(fetchPrices,30000);
 
