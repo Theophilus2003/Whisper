@@ -824,7 +824,7 @@ function jupFetch(path) {
     return fetch(window.location.origin + '/jup' + path)
       .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
   }
-  var key = getKeys().jup;
+  var key = getJupKey();
   var headers = {'Accept': 'application/json'};
   if (key) headers['x-api-key'] = key;
   return fetch('https://api.jup.ag' + path, {headers: headers})
@@ -858,7 +858,7 @@ function go(id, navEl) {
   if (id === 'order')      { updatePreview(); checkWalletForOrder(); }
   if (id === 'wallet')     refreshWalletPage();
   if (id === 'orders')     drawOpenOrders();
-  if (id === 'keys')       showKeyStatus();
+  if (id === 'keys')       refreshKeyUI();
 }
 window.go = go;
 
@@ -1227,7 +1227,7 @@ async function scoreWithClaude(bullCount, topMarket, totalMarkets) {
   var prompt = 'You are a crypto trading signal scorer for Market Whisperer, a smart DCA agent on Solana.\n\nScore this signal and return ONLY valid JSON (no extra text):\n\nPREDICTION MARKETS:\n- '+totalMarkets+' markets checked, '+bullCount+' leaning bullish\n- Top market: "'+topMarket.q+'" at '+(topMarket.yes*100).toFixed(0)+'% YES\n\nTOKEN METRICS (SOL):\n- Organic score: 98/100 (very high — real trading activity)\n- 24h volume: $4.3B\n- Holder count: 2.3M wallets\n- Whale concentration: LOW (top holders only 1.2%)\n- Current price: '+(P.sol ? '$'+P.sol.toFixed(2) : 'unknown')+'\n\nReturn ONLY this JSON:\n{"score":0-100,"dir":"BULLISH|NEUTRAL|BEARISH","conf":"HIGH|MEDIUM|LOW","multi":0.5-2.0,"tpPct":5-15,"slPct":3-10,"reasoning":"2-3 plain English sentences explaining the signal for a non-expert"}';
 
   try {
-    var anthropicKey = getKeys().claude;
+    var anthropicKey = getClaudeKey();
     if (!anthropicKey) throw new Error('No Anthropic key set');
     var r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -1284,6 +1284,8 @@ function drawReasoning() {
   setText('r-conf', lastSignal.conf);
   setText('r-multi', lastSignal.multi + '\u00d7');
 }
+
+window.fetchTokenData = fetchTokenData; // called from Refresh button on token page
 
 // ── NETWORK ──────────────────────────────────────────────────
 function setNet(net) {
@@ -1472,62 +1474,91 @@ function drawOpenOrders() {
 }
 
 // ── KEY MANAGEMENT ───────────────────────────────────────────
+function getJupKey()    { return sessionStorage.getItem('mw_jup')    || ''; }
+function getClaudeKey() { return sessionStorage.getItem('mw_claude') || ''; }
+
+function refreshKeyUI() {
+  var jup    = getJupKey();
+  var claude = getClaudeKey();
+
+  // Update every status element on the page (some may not exist yet — that's fine)
+  var els = {
+    'key-jup-status':  {val: jup,    ok:'✓ Set', bad:'Not set'},
+    'key-jup-status2': {val: jup,    ok:'✓ Set', bad:'Not set'},
+    'key-cl-status':   {val: claude, ok:'✓ Set', bad:'Not set'},
+    'key-cl-status2':  {val: claude, ok:'✓ Set', bad:'Not set'},
+    'key-mode':        {val: true,   ok: ON_PROXY ? '✓ Local proxy (node proxy.js)' : 'Browser direct', bad:''},
+    'key-pred-status': {val: ON_PROXY || jup, ok:'✓ Active', bad:'Needs Jupiter key'},
+    'key-ai-status':   {val: claude, ok:'✓ Claude claude-sonnet-4-6', bad:'Using math fallback (add key above)'},
+  };
+
+  Object.keys(els).forEach(function(id) {
+    var e = document.getElementById(id);
+    if (!e) return;
+    var cfg = els[id];
+    e.textContent = cfg.val ? cfg.ok : cfg.bad;
+    e.style.color  = cfg.val ? 'var(--green)' : (id.includes('mode') ? 'var(--blue)' : 'var(--red)');
+  });
+
+  // Nav icon
+  document.querySelectorAll('.nav-item').forEach(function(n) {
+    if (n.textContent.indexOf('API Keys') >= 0) {
+      var ic = n.querySelector('.nav-icon');
+      if (ic) ic.textContent = (ON_PROXY || jup) && claude ? '✅' : '🔑';
+    }
+  });
+}
+
 window.saveKeyJup = function() {
-  var v = el('input-jup') ? el('input-jup').value : '';
-  if (!v.trim()) { alert('Please enter your Jupiter API key'); return; }
-  saveKeys(v, null);
-  el('input-jup').value = '';
-  showKeyStatus();
-  alert('✓ Jupiter key saved for this session. Refreshing prediction markets...');
-  fetchPredictionMarkets().then(function(mkts) { renderMarkets(mkts.slice(0,4),'dash-mkt-list','mkt-badge'); });
+  var inp = document.getElementById('input-jup');
+  var val = inp ? inp.value.trim() : '';
+  if (!val) { alert('Paste your Jupiter API key first.'); return; }
+  sessionStorage.setItem('mw_jup', val);
+  if (inp) inp.value = '';
+  refreshKeyUI();
+  // Immediately retry prediction markets with new key
+  if (typeof fetchPredictionMarkets === 'function') {
+    fetchPredictionMarkets().then(function(mkts) {
+      if (typeof renderMarkets === 'function') renderMarkets(mkts.slice(0,4), 'dash-mkt-list', 'mkt-badge');
+    }).catch(function(){});
+  }
+  // Show success inline — no alert (alerts block UI and feel jarring)
+  var btn = document.querySelector('button[onclick="saveKeyJup()"]');
+  if (btn) { var orig = btn.textContent; btn.textContent = '✓ Saved!'; btn.style.background='rgba(34,197,94,.3)'; setTimeout(function(){btn.textContent=orig;btn.style.background='';},2000); }
 };
 
 window.saveKeyClaude = function() {
-  var v = el('input-claude') ? el('input-claude').value : '';
-  if (!v.trim()) { alert('Please enter your Anthropic API key'); return; }
-  saveKeys(null, v);
-  el('input-claude').value = '';
-  showKeyStatus();
-  alert('✓ Claude key saved for this session. AI scoring is now active.');
+  var inp = document.getElementById('input-claude');
+  var val = inp ? inp.value.trim() : '';
+  if (!val) { alert('Paste your Anthropic API key first.'); return; }
+  sessionStorage.setItem('mw_claude', val);
+  if (inp) inp.value = '';
+  refreshKeyUI();
+  var btn = document.querySelector('button[onclick="saveKeyClaude()"]');
+  if (btn) { var orig = btn.textContent; btn.textContent = '✓ Saved!'; btn.style.background='rgba(34,197,94,.3)'; setTimeout(function(){btn.textContent=orig;btn.style.background='';},2000); }
 };
 
-window.clearKey = function(storageKey, statusId, inputId) {
+window.clearKey = function(storageKey, s1, inputId) {
   sessionStorage.removeItem(storageKey);
-  if (el(statusId)) { el(statusId).textContent = 'Not set'; el(statusId).style.color = 'var(--red)'; }
-  if (el(inputId)) el(inputId).value = '';
-  showKeyStatus();
+  var inp = document.getElementById(inputId);
+  if (inp) inp.value = '';
+  refreshKeyUI();
 };
 
 window.toggleShow = function(inputId, btn) {
-  var inp = el(inputId);
+  var inp = document.getElementById(inputId);
   if (!inp) return;
-  if (inp.type === 'password') { inp.type = 'text'; btn.textContent = 'Hide'; }
-  else { inp.type = 'password'; btn.textContent = 'Show'; }
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+  btn.textContent = inp.type === 'password' ? 'Show' : 'Hide';
 };
 
-function showKeyStatus() {
-  var keys = getKeys();
-  var jupSet = !!keys.jup;
-  var clSet  = !!keys.claude;
+// Legacy aliases used elsewhere
+function showKeyStatus() { refreshKeyUI(); }
+function updateKeyStatus() { refreshKeyUI(); }
 
-  // Update status dots in key page
-  function setEl(id, text, color) { var e = el(id); if(e){e.textContent=text;e.style.color=color;} }
-  setEl('key-jup-status',  jupSet ? '✓ Set' : 'Not set', jupSet ? 'var(--green)' : 'var(--red)');
-  setEl('key-cl-status',   clSet  ? '✓ Set' : 'Not set', clSet  ? 'var(--green)' : 'var(--red)');
-  setEl('key-jup-status2', jupSet ? '✓ Set' : 'Not set', jupSet ? 'var(--green)' : 'var(--red)');
-  setEl('key-cl-status2',  clSet  ? '✓ Set' : 'Not set', clSet  ? 'var(--green)' : 'var(--red)');
-  setEl('key-mode',     ON_PROXY ? 'Local proxy (node proxy.js)' : 'Direct browser calls', ON_PROXY ? 'var(--green)' : 'var(--blue)');
-  setEl('key-pred-status', ON_PROXY || jupSet ? '✓ Active' : 'Jupiter key needed', ON_PROXY || jupSet ? 'var(--green)' : 'var(--amber)');
-  setEl('key-ai-status',   clSet ? '✓ Claude claude-sonnet-4-6' : 'Using math fallback (add key for AI)', clSet ? 'var(--green)' : 'var(--amber)');
-
-  // Update nav item with indicator
-  var keyNavs = document.querySelectorAll('.nav-item');
-  keyNavs.forEach(function(n) {
-    if (n.textContent.includes('API Keys')) {
-      var allSet = (ON_PROXY || jupSet) && clSet;
-      n.querySelector('.nav-icon').textContent = allSet ? '✅' : '🔑';
-    }
-  });
+// Also fix getKeys() to use the correct storage keys
+function getKeys() {
+  return { jup: getJupKey(), claude: getClaudeKey() };
 }
 
 // ── INIT ──────────────────────────────────────────────────────
@@ -1537,7 +1568,7 @@ document.querySelectorAll('.page').forEach(function(p) {
 });
 
 setText('clock', new Date().toTimeString().slice(0,8));
-showKeyStatus(); // show current key state
+refreshKeyUI(); // show current key state on load
 
 // Start price fetching
 fetchPrices();
