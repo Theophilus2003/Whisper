@@ -831,6 +831,37 @@ function jupFetch(path) {
     .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
 }
 
+
+// ── NAVIGATION ──────────────────────────────────────────────
+function go(id, navEl) {
+  // Hide all pages
+  var pages = document.querySelectorAll('.page');
+  for (var i = 0; i < pages.length; i++) {
+    pages[i].style.display = 'none';
+    pages[i].classList.remove('show');
+  }
+  // Show target page
+  var target = document.getElementById('page-' + id);
+  if (target) { target.style.display = 'block'; target.classList.add('show'); }
+
+  // Update nav active state
+  var navItems = document.querySelectorAll('.nav-item');
+  for (var j = 0; j < navItems.length; j++) navItems[j].classList.remove('active');
+  if (navEl) navEl.classList.add('active');
+
+  // Page-specific data loading
+  if (id === 'price')      loadPricePage();
+  if (id === 'token')      fetchTokenData();
+  if (id === 'prediction') showPredictionPage();
+  if (id === 'log')        drawFullLog();
+  if (id === 'reasoning')  drawReasoning();
+  if (id === 'order')      { updatePreview(); checkWalletForOrder(); }
+  if (id === 'wallet')     refreshWalletPage();
+  if (id === 'orders')     drawOpenOrders();
+  if (id === 'keys')       showKeyStatus();
+}
+window.go = go;
+
 // ── LOGGING ──────────────────────────────────────────────────
 function addLog(tag, cls, msg, src) {
   var t = new Date().toTimeString().slice(0,8);
